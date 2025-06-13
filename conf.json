@@ -1,0 +1,108 @@
+{
+    "database": {
+        "src": "archive.db",
+        "table": "bookmarks",
+        "scan": {
+            "trunk": "",
+            "include": [
+                "/home/you/yourfolderofchoice",
+                "/home/you/code"
+            ],
+            "exclude": [
+                "/home/you/code/rust/serv1",
+                "/home/you/code"
+            ]
+        },
+        "alt": true,
+        "back": {
+            "version": "json_utc_01_00",
+            "frequency": 1,
+            "multiplicity": 4,
+            "copies": [
+            ],
+            "base": "backup_",
+            "suffix": [
+                "db",
+                "json"
+            ],
+            "location": "/home/you/code"
+        }
+    },
+    "mime": [
+        [
+            "Image",
+            "blp",
+            "bmp",
+            "cur",
+            "dcx",
+            "dds",
+            "dib",
+            "eps",
+            "fli",
+            "flc",
+            "fpx",
+            "ftex",
+            "gbr",
+            "gd",
+            "gif",
+            "icns",
+            "ico",
+            "im",
+            "imt",
+            "jpeg",
+            "jpg",
+            "mic",
+            "mpo",
+            "msp",
+            "pcd",
+            "pcx",
+            "pixar",
+            "png",
+            "ppm",
+            "psd",
+            "sgi",
+            "tga",
+            "tiff",
+            "wal",
+            "xbm",
+            "xpm"
+        ],
+        [
+            "Text",
+            "txt"
+        ],
+        [
+            "PDF",
+            "pdf"
+        ]
+    ],
+    "font": {
+        "face": "FreeSans",
+        "size": 10,
+        "family": 76,
+        "slant": "normal",
+        "style": "thisstyle",
+        "weight": "normal",
+        "underlined": "false",
+        "strikethrough": "false",
+        "antialiased": "False"
+    },
+    "tkfont": {
+        "family": "FreeSans",
+        "size": 10,
+        "weight": "normal"
+    },
+    "style": {
+        "theme": "default",
+        "font": {
+            "size": 0
+        }
+    },
+    "wrap": "word",
+    "index": "/home/illudens/somefolder/index.xml",
+    "save": "/home/illudens/yourfolderofchoice/audiovideoperchance",
+    "open": "/home/illudens/yourfolderofchoice/yourarmsforahug",
+    "loc": "./conf.xml",
+    "x": "639",
+    "y": "433"
+}

@@ -1,0 +1,12 @@
+[package]
+name = "memoserv"
+version = "0.1.1"
+edition = "2021"
+
+[dependencies]
+zbus = "5.3.0"
+zbus_macros = "5.3.0"
+tokio = { version = "1.39.2", features = ["full"] }
+tokio-macros = "2.4.0"
+memobook = { version = "0.1.1", path="memobook" }
+event-listener = "5.4.0"
