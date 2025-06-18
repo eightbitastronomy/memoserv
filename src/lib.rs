@@ -265,7 +265,7 @@ fn manage_helper(&mut self, vcommand: Vec<&str>) -> String {
         },
         // IMPORT WILL ALMOST CERTAINLY ALTER THE DB, SO DO A BACKUP
         Manager::Import(imp) => {
-            let memobk = self.mb.lock().unwrap();
+            let mut memobk = self.mb.lock().unwrap();
             self.cfg.check_backup(true);
             match memobk.import(imp) {
                 Ok(s) => s,

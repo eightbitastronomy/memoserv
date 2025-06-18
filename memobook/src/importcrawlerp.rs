@@ -23,7 +23,7 @@
 
 
 
-// importcrawler.rs: no async functionality. See importcrawlerp.rs for async.
+// importcrawlerp.rs: async functionality. See importcrawler.rs for sync.
 
 
 pub mod import_crawler {
@@ -39,6 +39,7 @@ use crate::modifiers::ModifyAddRecord;
 use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::thread::available_parallelism;
 //use std::time::Instant;
 
 
@@ -73,6 +74,24 @@ impl Default for ImportCrawler {
     fn default() -> Self {
         Self::new()
     }
+}
+
+
+async fn process(pathlist: &[ImportPair], recordsdict: &json::JsonValue) -> Result<Vec<ImportPair>, MBError> {
+    let mut retvec: Vec<ImportPair> = vec![];
+    for item in pathlist {
+        let inputdata = match fs::read(item.target.as_path()) {
+            Ok(f) => f,
+            Err(e) => { return Err(MBError::Import(format!("import error: {e}"))); }
+        };
+        let sum: String = digest(inputdata);
+        if recordsdict.has_key(&sum) {
+            retvec.push(ImportPair {sum, target: item.target.to_path_buf()});
+        } else {
+            //return Err(MBError::Nil);
+        }
+    }
+    Ok(retvec)
 }
 
 
@@ -119,7 +138,7 @@ impl ImportCrawler {
     }
 
 
-    pub fn crawl(&mut self) -> Result<&Self, MBError> {
+    pub async fn crawl(&mut self) -> Result<&Self, MBError> {
         self.results_empty = true;
         let Some(ref importsrc) = self.importfile else {
             return Err(MBError::Import("no source file specified".to_string()));
@@ -140,19 +159,12 @@ impl ImportCrawler {
             Ok(rj) => rj,
             Err(e) => { return Err(MBError::Import(format!("unable to parse import json: {e}"))); }
         };
-        // prepare the processor function and other vars
+        // prepare the processor function and other vars. Processor fctn just makes an ImportPair, nothing more.
+        // in the sync version, the processor function also computes the checksum.
         ////let start1 = Instant::now();
-        let resultsvec: Vec<ImportPair> = match self.crawler.crawl(
+        let preresultsvec: Vec<ImportPair> = match self.crawler.crawl(
             &mut |filecanon: PathBuf| {
-                let inputdata = match fs::read(filecanon.as_path()) {
-                    Ok(f) => f,
-                    Err(_) => return Err(MBError::Nil)
-                };
-                let sum: String = digest(inputdata);
-                if recordsdict.has_key(&sum) {
-                    return Ok(ImportPair {sum, target: filecanon})
-                }
-                Err(MBError::Nil)
+                Ok(ImportPair { sum: "".to_string(), target: filecanon})
             }
         ) {
             Ok(c) => match c.retrieve() {
@@ -162,12 +174,36 @@ impl ImportCrawler {
                     return Ok(self);
                 }
             },
-            Err(e) => { return Err(MBError::Import(format!("import error: {e}"))); }
+            Err(e) => { return Err(MBError::Import(format!("import directory contents error: {e}"))); }
         };
         ////let mut stop = start1.elapsed().as_millis();
-        ////println!("Duration of recursive processing: {}", stop);
+        ////println!("Duration for gathering paths: {}", stop);
+        // Resultsvec will just have file paths, so each must be processed...
+        // Check # of processes/threads = numcpus, then slice into numcpus,
+        // Loop over async tasks == numcpus, await and gather results
+        let num_tasks = match available_parallelism() {
+            Ok(nz) => nz.get(),
+            Err(e) => { return Err(MBError::Import(format!("error in import call: {e}"))); }
+        };
+        ////println!("Num tasks: {}", num_tasks);
+        let chunksize = (preresultsvec.len()/num_tasks) as usize;
+        ////println!("Len: {}, Chunksize: {}", preresultsvec.len(), chunksize);
+
+        let mut collectionvec: Vec<Vec<ImportPair>> = vec![];
         ////let start2 = Instant::now();
+        for i in 0..num_tasks {
+            if i < num_tasks - 1 {
+                collectionvec.push(process(&preresultsvec[i*chunksize..(i+1)*chunksize], &recordsdict).await?);
+            } else { 
+                collectionvec.push(process(&preresultsvec[i*chunksize..], &recordsdict).await?);
+            }
+        }
+        let resultsvec = collectionvec.concat();
+        ////stop = start2.elapsed().as_millis();
+        ////println!("Duration for processing path sums: {}", stop);
+        // Gather the ModifyAddRecords, remove hits
         let mut processedvec: Vec<ModifyAddRecord> = Vec::new();
+        ////let start3 = Instant::now();
         for pair in resultsvec.iter() {
             let temprecordjson = recordsdict.remove(&pair.sum);
             match temprecordjson {
@@ -216,9 +252,10 @@ impl ImportCrawler {
                 }
             }
         }
-        ////stop = start2.elapsed().as_millis();
-        ////println!("Duration of gathering vec of ModifyAddRecords: {}", stop);
-        let start3 = Instant::now();
+        ////stop = start3.elapsed().as_millis();
+        ////println!("Duration for assembling vec of ModifyAddRecords: {}", stop);
+        ////let start4 = Instant::now();
+        // write out the log of misses
         self.results = processedvec;
         self.results_empty = false;
         if !recordsdict.is_empty() {
@@ -234,8 +271,8 @@ impl ImportCrawler {
                 Err(_) => { println!("error flushing import log"); }
             }
         }
-        ////stop = start3.elapsed().as_millis();
-        ////println!("Duration of writing log: {}", stop);
+        ////stop = start4.elapsed().as_millis();
+        ////println!("Duration for writing log file: {}", stop);
         Ok(self)
     }
     

@@ -52,7 +52,7 @@ pub mod crawler;
 pub mod filecrawler;
 pub mod grepcrawler;
 pub mod transportstruct;
-pub mod importcrawler;
+pub mod importcrawlerp; // <--Change here to use synchronous importcrawler
 pub mod liteexportquery;
 pub mod exportlogger;
 pub mod dbhexgenerator;
@@ -64,6 +64,7 @@ pub mod utcparser;
 
 
 use rusqlite::{Connection, Error};
+//use std::time::Instant;
 use std::collections::HashMap as HashMap;
 use mimer::Mimer as Mimer;
 use configuration::MBInfo as MBInfo;
@@ -74,7 +75,6 @@ use crate::queryassembler::QueryAssembler;
 use crate::litequeryassembler::lite_query_assembler::LiteQueryAssembler as LiteQueryAssembler;
 use crate::modifierassembler::ModifierAssembler;
 use crate::mberror::MBError;
-//use crate::configuration::configuration::Configuration;
 use crate::configuration::Configuration;
 use crate::dbopenerassembler::DBOpenerAssembler;
 use crate::liteopen::LiteOpen;
@@ -86,7 +86,7 @@ use crate::litetargetremove::LiteTargetRemove;
 use crate::grepcrawler::grep_crawler::GrepCrawler;
 use crate::crawler::CrawlOption;
 use crate::transportstruct::TransPortStruct;
-use crate::importcrawler::import_crawler::ImportCrawler;
+use crate::importcrawlerp::import_crawler::ImportCrawler; // <--Change here to use synchronous importcrawler
 use crate::exportlogger::ExportLogger;
 
 
@@ -134,7 +134,7 @@ pub trait Queryable {
     fn search(&self, req: impl (for <'a> Queryer<'a>)) -> Result<Vec<String>, MBError>;
     fn modify(&mut self, cmd: &Modifier) -> Result<(), MBError>;
     fn target(&mut self, cfg: &Configuration) -> Result<(), MBError>;
-    fn import(&self, portinfo: TransPortStruct) -> Result<String, MBError>;
+    fn import(&mut self, portinfo: TransPortStruct) -> Result<String, MBError>;
     fn export(&self, portinfo: TransPortStruct) -> Result<String, MBError>;
     fn disconnect(&mut self);  
 }
@@ -342,25 +342,48 @@ impl Queryable for MemoBook {
         Ok(())
     }
 
-    fn import(&self, portinfo: TransPortStruct) -> Result<String, MBError> {
-        if let Some(conn) = self.connection.as_ref() {
+    fn import(&mut self, portinfo: TransPortStruct) -> Result<String, MBError> {
+        if let Some(conn) = self.connection.as_mut() {
             let mut fs_importer: ImportCrawler = ImportCrawler::new();
             fs_importer.set_options(CrawlOption::FollowLinks(portinfo.links))
                 .set_options(CrawlOption::Transport(portinfo.target))
                 .set_options(CrawlOption::Log(portinfo.log))
                 .set_options(CrawlOption::Repository(self.info.scan.clone()));
-            match fs_importer.crawl() {
+            // Setup the async runtime for use with importcrawlerp, or comment all out
+            let asyncruntime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build() 
+            {
+                Ok(rt) => rt,
+                Err(e) => { return Err(MBError::Import(format!("Async error during import: {e}"))); }
+            };
+            let asyncresult = asyncruntime.block_on(async { fs_importer.crawl().await });
+            // Change the next match line according to whether async is being used or not
+            //match fs_importer.crawl() {
+            match asyncresult {
                 Ok(_) => {},
                 Err(e) => { return Err(e); }
             }
+            ////let start = Instant::now();
+            // Start a transaction for the database calls, assert the calls, then commit
+            let transact = match conn.transaction() {
+                Ok(t) => t,
+                Err(e) => return Err(MBError::Sqlite(e))
+            };
             for result in fs_importer.iter() {
                 let cmdobj = Box::new(LiteAddRecord);
                 let cmd: Modifier = Modifier::AddRecord(result.clone());
-                match conn.execute_batch(cmdobj.form(&self.info.table, &cmd)?.join(" ").as_str()) {
+                match transact.execute_batch(cmdobj.form(&self.info.table, &cmd)?.join(" ").as_str()) {
                     Ok(_) => {},
                     Err(e) => return Err(MBError::BadModify(format!("DB import error: {e}")))
-                }   
+                }
             }
+            match transact.commit() {
+                Ok(_) => {},
+                Err(e) => return Err(MBError::Sqlite(e))
+            }
+            ////let duration = start.elapsed().as_millis();
+            ////println!("Duration of database insertions: {}", duration);
         }
         Ok("pending".to_string())
     }
