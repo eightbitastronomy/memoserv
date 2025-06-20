@@ -97,6 +97,8 @@ pub fn parse_search_msg(msgvec: Vec<&str>) -> std::result::Result<Query<MBFilter
 }
 
 
+/* Obsolete. Newer version will handle multiple file names so that the modify method of memo
+    can start a transaction, insert many, then commit.
 pub fn parse_add_record(input: &[&str]) -> std::result::Result<Modifier, MBError> {    
     let count: usize = input.len();
     let mut index: usize = 1;
@@ -125,6 +127,38 @@ pub fn parse_add_record(input: &[&str]) -> std::result::Result<Modifier, MBError
         return Err(MBError::DBusMessage("missing terms for add record".to_string()));
     }
     Ok(Modifier::AddRecord(ModifyAddRecord::new(argfile, &argmark, &argtype)))
+}*/
+
+
+pub fn parse_add_record(input: &[&str]) -> std::result::Result<Modifier, MBError> {
+    let count: usize = input.len();
+    let mut index: usize = 0;
+    let mut marks: Vec<String> = Vec::new(); 
+    let mut types: Vec<String> = Vec::new(); 
+    let mut files: Vec<String> = Vec::new(); 
+    while index < count {
+        let targetvec: &mut Vec<String> = match input[index] {
+            "mark" => &mut marks,
+            "type" => &mut types,
+            "file" => &mut files,
+            _ => return Err(MBError::DBusMessage("improper add term: add term type".to_string()))
+        };
+        let numvecterm: usize = match input[index+1].to_string().parse::<usize>() {
+            Ok(x) => x,
+            Err(_) => return Err(MBError::DBusMessage("invalid value for # of add terms".to_string()))
+        };
+        for subindex in 0..numvecterm {
+            targetvec.push(input[index+2+subindex].to_string());
+        }
+        index += numvecterm + 2;
+    }
+    if index != count {
+        return Err(MBError::DBusMessage("add format error or unused terms present".to_string()))
+    }
+    if types.is_empty() || marks.is_empty() || files.is_empty() {
+        return Err(MBError::DBusMessage("missing terms for add record".to_string()));
+    }
+    Ok(Modifier::AddRecord(ModifyAddRecord::new(&files, &marks, &types)))
 }
 
 

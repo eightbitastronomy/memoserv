@@ -38,7 +38,9 @@ impl ModifierAssembler for LiteAddRecord {
                 let mut resultvec: Vec<String> = Vec::new();
                 for mark in ar.marks.iter() {
                     for typ in ar.ftypes.iter() {
-                        resultvec.push(format!("insert into {table} (mark, file, type) values (\'{}\', \'{}\', \'{}\');", mark, ar.file, typ));
+                        for fil in ar.files.iter() {
+                            resultvec.push(format!("insert into {table} (mark, file, type) values (\'{}\', \'{}\', \'{}\');", mark, fil, typ));
+                        }
                     }
                 }
                 Ok(resultvec)

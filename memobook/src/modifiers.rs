@@ -24,7 +24,7 @@
 
 #[derive(Clone)]
 pub struct ModifyAddRecord {
-    pub file: String,
+    pub files: Vec<String>,
     pub marks: Vec<String>,
     pub ftypes: Vec<String>
 }
@@ -32,9 +32,9 @@ pub struct ModifyAddRecord {
 
 impl ModifyAddRecord {
 
-    pub fn new(file: &str, marks: &[String], ftypes: &[String]) -> ModifyAddRecord {
+    pub fn new(files: &[String], marks: &[String], ftypes: &[String]) -> ModifyAddRecord {
         ModifyAddRecord {
-            file: file.to_string(),
+            files: files.to_vec(),
             marks: marks.to_vec(),
             ftypes: ftypes.to_vec()
         }

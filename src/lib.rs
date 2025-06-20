@@ -76,7 +76,14 @@ impl MemoBookServer {
 
 
     async fn backup(&self) -> String {
+        //let memobk = self.mb.lock().unwrap();
         self.cfg.assemble_backup_info()
+    }
+
+
+    async fn repositories(&self) -> String {
+        //let memobk = self.mb.lock().unwrap();
+        self.cfg.assemble_repo_info()
     }
 
 

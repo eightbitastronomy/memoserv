@@ -235,6 +235,40 @@ impl Configuration {
     }
 
 
+    pub fn assemble_repo_info(&self) -> String {
+        let includev = self.mb.scan.get_include();
+        let bufferinclude: Vec<&str> = if includev.is_empty() {
+            vec![]
+        } else {
+            includev.iter()
+                .map(|x: &PathBuf| x.as_path()
+                                .to_str()
+                                .unwrap())
+                .collect::<Vec<&str>>()
+                .to_vec()
+        };
+        let excludev = self.mb.scan.get_exclude();
+        let bufferexclude: Vec<&str> = if excludev.is_empty() {
+            vec![]
+        } else {
+            excludev.iter()
+                .map(|x: &PathBuf| x.as_path()
+                                .to_str()
+                                .unwrap())
+                .collect::<Vec<&str>>()
+                .to_vec()
+        };
+        let jrepo = object!{
+            include: bufferinclude,
+            exclude: bufferexclude
+        };
+        match jrepo {
+            json::JsonValue::Object(o) => json::stringify(o),
+            _ => "".to_string()
+        }
+    }
+
+
     pub fn assemble_backup_info(&self) -> String {
         let backupmaker = UtcParser {};
         let jback = match backupmaker.write(&self.mb.back) {

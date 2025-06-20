@@ -317,20 +317,31 @@ impl Queryable for MemoBook {
     }
 
 
-    // behavior of MarkUpdate: requires the caller to know all the possible types in the case
-    //   where # of rems != # of adds. This means the caller will need to query for the types
-    //   separately.
+    // behavior of MarkUpdate: 
+    //   o  requires the caller to know all the possible types in the case
+    //      where # of rems != # of adds. This means the caller will need to query for the types
+    //      separately.
+    //   o  will insert one record into db for each combination of file, type, & mark given,
+    //      hence a cartesian product.
     fn modify(&mut self, cmd: &Modifier) -> Result<(), MBError> {
-        if let Some(conn) = self.connection.as_ref() {
+        if let Some(conn) = self.connection.as_mut() {
             let cmdobj: Box<dyn ModifierAssembler> = match cmd {
                 Modifier::AddRecord(_) => Box::new(LiteAddRecord),
                 Modifier::FieldReplace(_) => Box::new(LiteFieldReplace),
                 Modifier::MarkUpdate(_) => Box::new(LiteMarkUpdate),
                 Modifier::TargetRemove(_) => Box::new(LiteTargetRemove)
             };
-            match conn.execute_batch(cmdobj.form(&self.info.table, cmd)?.join(" ").as_str()) {
+            let transact = match conn.transaction() {
+                Ok(t) => t,
+                Err(e) => return Err(MBError::Sqlite(e))
+            };
+            match transact.execute_batch(cmdobj.form(&self.info.table, cmd)?.join(" ").as_str()) {
                 Ok(_) => {},
                 Err(e) => return Err(MBError::BadModify(format!("DB modification error: {e}")))
+            }
+            match transact.commit() {
+                Ok(_) => {},
+                Err(e) => return Err(MBError::Sqlite(e))
             }
         }
         Ok(())

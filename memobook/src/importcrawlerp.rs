@@ -203,6 +203,23 @@ impl ImportCrawler {
         ////println!("Duration for processing path sums: {}", stop);
         // Gather the ModifyAddRecords, remove hits
         let mut processedvec: Vec<ModifyAddRecord> = Vec::new();
+        fn process_json(input: &json::JsonValue) -> Vec<String> {
+            match input {
+                json::JsonValue::Array(ar) => {
+                    ar.iter().map(|x| 
+                        match x {
+                            json::JsonValue::Short(s) => s.to_string(),
+                            json::JsonValue::String(s) => s.to_owned(),
+                            _ => "".to_string()
+                        }
+                    ).filter(|e| !e.is_empty())
+                    .collect()
+                },
+                json::JsonValue::Short(s) => vec![s.to_string()],
+                json::JsonValue::String(s) => vec![s.to_owned()],
+                _ => vec![] 
+            }
+        }
         ////let start3 = Instant::now();
         for pair in resultsvec.iter() {
             let temprecordjson = recordsdict.remove(&pair.sum);
@@ -213,37 +230,9 @@ impl ImportCrawler {
                 json::JsonValue::Object(jobj) =>{ 
                     processedvec.push(
                         ModifyAddRecord {
-                            file: pair.target.as_path().to_str().unwrap().to_string(),
-                            marks: match &jobj["mark"] {
-                                json::JsonValue::Array(ar) => {
-                                    ar.iter().map(|x| 
-                                        match x {
-                                            json::JsonValue::Short(s) => s.to_string(),
-                                            json::JsonValue::String(s) => s.to_owned(),
-                                            _ => "".to_string()
-                                        }
-                                    ).filter(|e| !e.is_empty())
-                                    .collect()
-                                },
-                                json::JsonValue::Short(s) => vec![s.to_string()],
-                                json::JsonValue::String(s) => vec![s.to_owned()],
-                                _ => vec![] 
-                            },
-                            ftypes: match &jobj["type"] {
-                                json::JsonValue::Array(ar) => {
-                                    ar.iter().map(|x| 
-                                        match x {
-                                            json::JsonValue::Short(s) => s.to_string(),
-                                            json::JsonValue::String(s) => s.to_owned(),
-                                            _ => "".to_string()
-                                        }
-                                    ).filter(|e| !e.is_empty())
-                                    .collect()
-                                },
-                                json::JsonValue::Short(s) => vec![s.to_string()],
-                                json::JsonValue::String(s) => vec![s.to_owned()],
-                                _ => vec![]
-                            }
+                            files: process_json(&jobj["file"]), 
+                            marks: process_json(&jobj["mark"]),
+                            ftypes: process_json(&jobj["type"])
                         }
                     );
                 },
