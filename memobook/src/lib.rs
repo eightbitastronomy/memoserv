@@ -40,6 +40,7 @@ pub mod maskingset;
 pub mod suffixhash;
 pub mod modifierassembler;
 pub mod litemarkupdate;
+pub mod litetypeupdate;
 pub mod litefieldreplace;
 pub mod litetargetremove;
 pub mod liteaddrecord;
@@ -82,6 +83,7 @@ use crate::modifiers::Modifier;
 use crate::liteaddrecord::LiteAddRecord;
 use crate::litefieldreplace::LiteFieldReplace;
 use crate::litemarkupdate::LiteMarkUpdate;
+use crate::litetypeupdate::LiteTypeUpdate;
 use crate::litetargetremove::LiteTargetRemove;
 use crate::grepcrawler::grep_crawler::GrepCrawler;
 use crate::crawler::CrawlOption;
@@ -317,18 +319,25 @@ impl Queryable for MemoBook {
     }
 
 
-    // behavior of MarkUpdate: 
-    //   o  requires the caller to know all the possible types in the case
-    //      where # of rems != # of adds. This means the caller will need to query for the types
-    //      separately.
-    //   o  will insert one record into db for each combination of file, type, & mark given,
-    //      hence a cartesian product.
+    // behavior of FieldReplace:
+    //   o  "field" is chosen by caller, i.e., mark, file, or type
+    //   o  The value pair is (original value, replacement value)
+    //   o  All records with field=original are updated to field=replacement
+    // behavior of MarkUpdate:
+    //   o  accepts a file name, marks to be added, marks to be removed
+    //   o  queries database for types associated with the file name
+    //   o  applies mark additions and deletions for the file for all types
+    // behavior of TypeUpdate:
+    //   o  accepts a file name, types to be added, types to be removed
+    //   o  queries database for marks associated with the file name
+    //   o  applies type additions and deletions for the file for all marks
     fn modify(&mut self, cmd: &Modifier) -> Result<(), MBError> {
         if let Some(conn) = self.connection.as_mut() {
             let cmdobj: Box<dyn ModifierAssembler> = match cmd {
                 Modifier::AddRecord(_) => Box::new(LiteAddRecord),
                 Modifier::FieldReplace(_) => Box::new(LiteFieldReplace),
                 Modifier::MarkUpdate(_) => Box::new(LiteMarkUpdate),
+                Modifier::TypeUpdate(_) => Box::new(LiteTypeUpdate),
                 Modifier::TargetRemove(_) => Box::new(LiteTargetRemove)
             };
             let transact = match conn.transaction() {

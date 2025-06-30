@@ -28,27 +28,25 @@ use crate::mberror::MBError;
 
 
 
-pub struct LiteMarkUpdate; // {
-//    pub aux: Vec<String>
-//}
+pub struct LiteTypeUpdate;
 
 
-impl ModifierAssembler for LiteMarkUpdate {
+impl ModifierAssembler for LiteTypeUpdate {
 
 
     fn form(&self, table: &str, mdfy: &Modifier) -> Result<Vec<String>, MBError> {
         match mdfy {
-            Modifier::MarkUpdate(mu) => {
+            Modifier::TypeUpdate(mu) => {
                 let mut resultvec: Vec<String> = Vec::new();
                 // Removals first 
                 for remitem in mu.rem.iter() {
-                    resultvec.push(format!("delete from {table} where file=\'{}\' and mark=\'{}\';", mu.file, remitem));
+                    resultvec.push(format!("delete from {table} where file=\'{}\' and type=\'{}\';", mu.file, remitem));
                 }
                 // Additions next
                 for additem in mu.add.iter() {
                     if let Some(auxvec) = &mu.aux {
                         for auxitem in auxvec.iter() {
-                            resultvec.push(format!("insert into {table} (mark, file, type) values (\'{}\', \'{}\', \'{}\');", additem, mu.file, auxitem));
+                            resultvec.push(format!("insert into {table} (mark, file, type) values (\'{}\', \'{}\', \'{}\');", auxitem, mu.file, additem));
                         }
                     } 
                     // there is no else case, because this means no types are associated with the file,
@@ -62,9 +60,10 @@ impl ModifierAssembler for LiteMarkUpdate {
 
     }
 
-/*    fn form(&self, table: &str, mdfy: &Modifier) -> Result<Vec<String>, MBError> {
+
+    /*fn form(&self, table: &str, mdfy: &Modifier) -> Result<Vec<String>, MBError> {
         match mdfy {
-            Modifier::MarkUpdate(mu) => {
+            Modifier::TypeUpdate(mu) => {
                 let mut resultvec: Vec<String> = Vec::new();
                 let mut largest: &Vec<String> = &mu.rem;
                 let mut difference:i32 = (mu.rem.len() as i32) - (mu.add.len() as i32);
@@ -81,20 +80,20 @@ impl ModifierAssembler for LiteMarkUpdate {
                     match pair {
                         _ => resultvec.push(format!("update {table} set mark=\'{}\' where file=\'{}\' and mark=\'{}\';", pair.1, mu.file, pair.0))
                     }*/
-                    resultvec.push(format!("update {table} set mark=\'{}\' where file=\'{}\' and mark=\'{}\';", pair.1, mu.file, pair.0));
+                    resultvec.push(format!("update {table} set type=\'{}\' where file=\'{}\' and type=\'{}\';", pair.1, mu.file, pair.0));
                     lastcounted += 1;
                 }
                 for i in 0..tail {
                     if addingflag {
-                        for typ in mu.ftypes.iter() {
-                            resultvec.push(format!("insert into {table} (mark, file, type) values (\'{}\', \'{}\', \'{}\');", largest[(lastcounted+i) as usize], mu.file, typ));
+                        for mrk in mu.marks.iter() {
+                            resultvec.push(format!("insert into {table} (mark, file, type) values (\'{}\', \'{}\', \'{}\');", mrk, mu.file, largest[(lastcounted+i) as usize]));
                         }
-                    } else if mu.ftypes.len() > 1 {
-                        for typ in mu.ftypes.iter() {
-                            resultvec.push(format!("delete from {table} where mark=\'{}\' and file=\'{}\' and type=\'{}\';", largest[(lastcounted+i) as usize], mu.file, typ));
+                    } else if mu.marks.len() > 1 {
+                        for mrk in mu.marks.iter() {
+                            resultvec.push(format!("delete from {table} where mark=\'{}\' and file=\'{}\' and type=\'{}\';", mrk, mu.file, largest[(lastcounted+i) as usize]));
                         }
                     } else {
-                        resultvec.push(format!("delete from {table} where mark=\'{}\' and file=\'{}\';", largest[(lastcounted+i) as usize], mu.file));
+                        resultvec.push(format!("delete from {table} where type=\'{}\' and file=\'{}\';", largest[(lastcounted+i) as usize], mu.file));
                     }
                 }
                 Ok(resultvec)
@@ -105,7 +104,7 @@ impl ModifierAssembler for LiteMarkUpdate {
 
 }
 
-
+/*
 #[cfg(test)]
 mod tests {
 
@@ -257,4 +256,4 @@ mod tests {
         }
     }
 
-}
+}*/

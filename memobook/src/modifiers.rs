@@ -71,7 +71,8 @@ pub struct ModifyMarkUpdate {
     pub file: String,
     pub ftypes: Vec<String>,
     pub rem: Vec<String>,
-    pub add: Vec<String>
+    pub add: Vec<String>,
+    pub aux: Option<Vec<String>>
 }
 
 
@@ -82,7 +83,32 @@ impl ModifyMarkUpdate {
             file: file.to_string(), 
             ftypes: ftypes.to_vec(),
             rem: rem.to_vec(), 
-            add: add.to_vec() 
+            add: add.to_vec(),
+            aux: None
+        }
+    } 
+
+}
+
+
+pub struct ModifyTypeUpdate {
+    pub file: String,
+    pub marks: Vec<String>,
+    pub rem: Vec<String>,
+    pub add: Vec<String>,
+    pub aux: Option<Vec<String>>
+}
+
+
+impl ModifyTypeUpdate {
+
+    pub fn new(file: &str, marks: &[String], rem: &[String], add: &[String]) -> ModifyTypeUpdate {
+        ModifyTypeUpdate { 
+            file: file.to_string(), 
+            marks: marks.to_vec(),
+            rem: rem.to_vec(), 
+            add: add.to_vec() ,
+            aux: None
         }
     } 
 
@@ -111,5 +137,7 @@ pub enum Modifier {
     AddRecord(ModifyAddRecord),
     FieldReplace(ModifyFieldReplace),
     MarkUpdate(ModifyMarkUpdate),
+    TypeUpdate(ModifyTypeUpdate),
     TargetRemove(ModifyTargetRemove)
 }
+

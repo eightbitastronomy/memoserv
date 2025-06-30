@@ -28,7 +28,13 @@ use memobook::logic::Logic;
 use memobook::query::Query;
 use memobook::mberror::MBError;
 use memobook::modifiers::Modifier;
-use memobook::modifiers::{ModifyAddRecord,ModifyFieldReplace,ModifyMarkUpdate,ModifyTargetRemove};
+use memobook::modifiers::{
+    ModifyAddRecord,
+    ModifyFieldReplace,
+    ModifyMarkUpdate,
+    ModifyTypeUpdate,
+    ModifyTargetRemove
+};
 use memobook::transportstruct::TransPortStruct;
 use crate::manager::Manager;
 use crate::configmodifier::ConfigModifier;
@@ -207,7 +213,7 @@ pub fn parse_mark_update(input: &[&str]) -> std::result::Result<Modifier, MBErro
         let targetvec: &mut Vec<String> = match input[index] {
             "rem" => &mut argrems,
             "add" => &mut argadds,
-            "type" => &mut argtype,
+            "aux" => &mut argtype,
             _ => return Err(MBError::DBusMessage("improper mark update term type".to_string()))
         };
         let numvecterm: usize = match input[index+1].to_string().parse::<usize>() {
@@ -226,6 +232,39 @@ pub fn parse_mark_update(input: &[&str]) -> std::result::Result<Modifier, MBErro
         return Err(MBError::DBusMessage("missing terms for mark update".to_string()));
     }
     Ok(Modifier::MarkUpdate(ModifyMarkUpdate::new(argfile, &argtype, &argrems, &argadds)))
+}
+
+
+pub fn parse_type_update(input: &[&str]) -> std::result::Result<Modifier, MBError> {
+    let count: usize = input.len();
+    let mut index: usize = 1;
+    let argfile: &str = input[0];
+    let mut argmark: Vec<String> = Vec::new();
+    let mut argrems: Vec<String> = Vec::new();
+    let mut argadds: Vec<String> = Vec::new();
+    while index < count {
+        let targetvec: &mut Vec<String> = match input[index] {
+            "rem" => &mut argrems,
+            "add" => &mut argadds,
+            "aux" => &mut argmark,
+            _ => return Err(MBError::DBusMessage("improper type update term type".to_string()))
+        };
+        let numvecterm: usize = match input[index+1].to_string().parse::<usize>() {
+            Ok(x) => x,
+            Err(_) => return Err(MBError::DBusMessage("invalid value for # of type update terms".to_string()))
+        };
+        for subindex in 0..numvecterm {
+            targetvec.push(input[index+2+subindex].to_string());
+        }
+        index += numvecterm + 2;
+    }
+    if index != count {
+        return Err(MBError::DBusMessage("type update format error or unused terms present".to_string()))
+    }
+    if argmark.is_empty() || (argrems.is_empty() && argadds.is_empty()) {
+        return Err(MBError::DBusMessage("missing terms for type update".to_string()));
+    }
+    Ok(Modifier::TypeUpdate(ModifyTypeUpdate::new(argfile, &argmark, &argrems, &argadds)))
 }
 
 
@@ -250,6 +289,7 @@ pub fn parse_modification_msg(input: Vec<&str>) -> std::result::Result<Modifier,
         "addrecord" => parse_add_record(&input[2..]),
         "fieldreplace" => parse_field_replace(&input[2..]),
         "markupdate" => parse_mark_update(&input[2..]),
+        "typeupdate" => parse_type_update(&input[2..]),
         "targetremove" => parse_target_remove(&input[2..]),
         _ => Err(MBError::DBusMessage("unknown modification type".to_string()))
     } 

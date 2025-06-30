@@ -23,6 +23,7 @@
 
 
 pub mod parse;
+pub mod prepare;
 pub mod manager;
 pub mod configmodifier;
 
@@ -37,6 +38,7 @@ use memobook::mbfilter::MBFilter;
 use memobook::query::Query;
 use memobook::modifiers::Modifier;
 use crate::parse::*;
+use crate::prepare::*;
 use crate::manager::Manager;
 use crate::configmodifier::ConfigModifier;
 
@@ -101,11 +103,15 @@ impl MemoBookServer {
 
 
     async fn modify(&mut self, vcommand: Vec<&str>) -> String {
-        let clientcmd: Modifier = match parse_modification_msg(vcommand) {
+        let mut clientcmd: Modifier = match parse_modification_msg(vcommand) {
             Ok(m) => m,
             Err(e) => return format!("Modify request error: {e}")
         };
         let mut memobk = self.mb.lock().unwrap();
+        match prepare_modification(&memobk, &mut clientcmd) {
+            Ok(_) => { },
+            Err(e) => { return format!("Error in modification auxiliary search: {e}"); }
+        }
         self.cfg.check_backup(true);
         match memobk.modify(&clientcmd) {
             Ok(()) => { self.cfg.mb_alt(true);
