@@ -22,16 +22,12 @@
 //  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 
-use crate::backer::{Backer, BackCopy};
 use json;
 
 
 pub trait BackerParserJSON {
 
-    type CopyItem: BackCopy;
-    type Item: Backer<Self::CopyItem>;
-
-    fn read(&self, source: &json::JsonValue) -> Result<Self::Item, String>;
-    fn write(&self, source: &Self::Item) -> Result<json::JsonValue, String>;
+    fn read(&mut self, source: &json::JsonValue) -> Result<(), String>;
+    fn write(&self) -> Result<json::JsonValue, String>;
 
 }

@@ -30,6 +30,8 @@ pub mod configmodifier;
 
 use event_listener::{Event};
 use memobook::configuration::Configuration;
+use memobook::backer::Backer;
+use memobook::backerparserjson::BackerParserJSON;
 use memobook::{MemoBook, Queryable};
 use zbus::{interface, object_server::SignalEmitter, Result};
 use std::sync::{Arc,Mutex};
@@ -44,17 +46,26 @@ use crate::configmodifier::ConfigModifier;
 
 
 
-pub struct MemoBookServer {
+pub struct MemoBookServer<B>
+where B: Backer+BackerParserJSON + std::marker::Send+ 'static
+{
     pub name: String,
     pub events: Arc<Event>,
     pub exitflag: Arc<AtomicBool>,
-    pub cfg: Configuration,
+    pub cfg: Arc<Mutex<Configuration<B>>>,
     pub mb: Arc<Mutex<MemoBook>>
 }
 
 
+
+unsafe impl<B: Backer+BackerParserJSON + std::marker::Send> Send for MemoBookServer<B> {}
+
+
+
 #[interface(name = "org.memobook.memoserv1")]
-impl MemoBookServer {
+impl<B> MemoBookServer<B>
+where B: Backer+BackerParserJSON + std::marker::Send+'static
+{
 
     async fn toc(&self, toctype: &str) -> String {
         let result = match parse_toc_msg(toctype) {
@@ -78,14 +89,14 @@ impl MemoBookServer {
 
 
     async fn backup(&self) -> String {
-        //let memobk = self.mb.lock().unwrap();
-        self.cfg.assemble_backup_info()
+        let memocfg = self.cfg.lock().unwrap();
+        memocfg.assemble_backup_info()
     }
 
 
     async fn repositories(&self) -> String {
-        //let memobk = self.mb.lock().unwrap();
-        self.cfg.assemble_repo_info()
+        let memocfg = self.cfg.lock().unwrap();
+        memocfg.assemble_repo_info()
     }
 
 
@@ -107,93 +118,29 @@ impl MemoBookServer {
             Ok(m) => m,
             Err(e) => return format!("Modify request error: {e}")
         };
-        let mut memobk = self.mb.lock().unwrap();
-        match prepare_modification(&memobk, &mut clientcmd) {
-            Ok(_) => { },
-            Err(e) => { return format!("Error in modification auxiliary search: {e}"); }
-        }
-        self.cfg.check_backup(true);
-        match memobk.modify(&clientcmd) {
-            Ok(()) => { self.cfg.mb_alt(true);
-                "".to_string()
-            },
-            Err(th) => format!("Modify request returned error: {th}")
-        }
+        { // lock memobook
+            let mut memobk = self.mb.lock().unwrap();
+            match prepare_modification(&memobk, &mut clientcmd) {
+                Ok(_) => { },
+                Err(e) => { return format!("Error in modification auxiliary search: {e}"); }
+            }
+            { // lock config
+                let mut memocfg = self.cfg.lock().unwrap();
+                memocfg.check_backup(true);
+                match memobk.modify(&clientcmd) {
+                    Ok(()) => { 
+                        memocfg.mb_alt(true);
+                        "".to_string()
+                    },
+                    Err(th) => format!("Modify request returned error: {th}")
+                }
+            } // release config
+        } // release memobook
     }
 
 
-    // NOTE, A REPO CHANGE MIGHT AFFECT FILES IN THE DB, SO A BACKUPMGR CALL
-    //  MIGHT BE IN ORDER...
-
     async fn manage(&mut self, vcommand: Vec<&str>) -> String {
-        self.manage_helper(vcommand)
-        /* let clientcmd: Manager = match parse_manage_msg(vcommand) {
-            Ok(m) => m,
-            Err(e) => return format!("Manage request error: {e}")
-        };
-        match clientcmd {
-            Manager::Configure(cfg) => {
-                match cfg {
-                    ConfigModifier::SetSource(ss) => {
-                        let mut memobk = self.mb.lock().unwrap();
-                        self.cfg.check_backup(true);
-                        self.cfg.set_source(&ss);
-                        match memobk.connect(Some(ss)) {
-                            Ok(()) => return "".to_string(),
-                            Err(e) => return format!("Error managing source: {e}")
-                        }
-                    },
-                    ConfigModifier::SetRepo(sr) => {
-                        let mut memobk = self.mb.lock().unwrap();
-                        self.cfg.check_backup(true);
-                        self.cfg.set_repo_by_repo(sr);
-                        match memobk.target(&self.cfg) {
-                            Ok(()) => return "".to_string(),
-                            Err(e) => return format!("Error managing repo: {e}")
-                        }
-                    },
-                    ConfigModifier::ModifyRepo(mrtuple) => { 
-                        let mut memobk = self.mb.lock().unwrap();
-                        self.cfg.check_backup(true);
-                        self.cfg.modify_repo_by_repo(mrtuple);
-                        match memobk.target(&self.cfg) {
-                            Ok(()) => return "".to_string(),
-                            Err(e) => return format!("Error managing repo: {e}")
-                        }
-                    },
-                    ConfigModifier::ModifyBackup(bu) => {
-                        let _memobk = self.mb.lock().unwrap();
-                        return match self.cfg.modify_backup(&bu) {
-                            Ok(()) => "".to_string(),
-                            Err(e) => format!("Error altering backup information: {e}")
-                        }
-                    }
-                }
-            },
-            // IMPORT WILL ALMOST CERTAINLY ALTER THE DB, SO DO A BACKUP
-            Manager::Import(imp) => {
-                let memobk = self.mb.lock().unwrap();
-                self.cfg.check_backup(true);
-                match memobk.import(imp) {
-                    Ok(s) => return s,
-                    Err(e) => return format!("Error importing files: {e}")
-                }
-            },
-            Manager::Export(exp) => {
-                let memobk = self.mb.lock().unwrap();
-                match memobk.export(exp) {
-                    Ok(s) => return s,
-                    Err(e) => return format!("Error exporting: {e}")
-                }
-            },
-            Manager::Backup => {
-                let _memobk = self.mb.lock().unwrap();
-                match self.cfg.do_backup() {
-                    Ok(s) => return s,
-                    Err(e) => return format!("Error making backup: {e}")
-                }
-            }
-        } */
+        self.manage_helper(vcommand) 
     }
 
 
@@ -203,13 +150,16 @@ impl MemoBookServer {
 
 
     async fn exit(&self) -> String {
-        {
+        { // lock memobook
             let mut memobk = self.mb.lock().unwrap();
             memobk.disconnect();
-            self.cfg.finish();
+            { // lock config
+                let memocfg = self.cfg.lock().unwrap();
+                memocfg.finish();
+            } // release config
             self.exitflag.store(true, Ordering::SeqCst);
             self.events.notify(1);
-        }
+        } // release memobook
         "Exiting".to_string()
     }
 
@@ -242,8 +192,11 @@ fn manage_helper(&mut self, vcommand: Vec<&str>) -> String {
             match cfg {
                 ConfigModifier::SetSource(ss) => {
                     let mut memobk = self.mb.lock().unwrap();
-                    self.cfg.check_backup(true);
-                    self.cfg.set_source(&ss);
+                    {
+                        let mut memocfg = self.cfg.lock().unwrap();
+                        memocfg.check_backup(true);
+                        memocfg.set_source(&ss);
+                    }
                     match memobk.connect(Some(ss)) {
                         Ok(()) => "".to_string(),
                         Err(e) => format!("Error managing source: {e}")
@@ -251,35 +204,44 @@ fn manage_helper(&mut self, vcommand: Vec<&str>) -> String {
                 },
                 ConfigModifier::SetRepo(sr) => {
                     let mut memobk = self.mb.lock().unwrap();
-                    self.cfg.check_backup(true);
-                    self.cfg.set_repo_by_repo(sr);
-                    match memobk.target(&self.cfg) {
-                        Ok(()) => "".to_string(),
-                        Err(e) => format!("Error managing repo: {e}")
+                    {
+                        let mut memocfg = self.cfg.lock().unwrap();
+                        memocfg.check_backup(true);
+                        memocfg.set_repo_by_repo(sr);   
+                        match memobk.target(&memocfg.mb().scan, memocfg.mime()) {
+                            Ok(()) => "".to_string(),
+                            Err(e) => format!("Error managing repo: {e}")
+                        }
                     }
                 },
                 ConfigModifier::ModifyRepo(mrtuple) => { 
                     let mut memobk = self.mb.lock().unwrap();
-                    self.cfg.check_backup(true);
-                    self.cfg.modify_repo_by_repo(mrtuple);
-                    match memobk.target(&self.cfg) {
-                        Ok(()) => "".to_string(),
-                        Err(e) => format!("Error managing repo: {e}")
+                    {
+                        let mut memocfg = self.cfg.lock().unwrap();
+                        memocfg.check_backup(true);
+                        memocfg.modify_repo_by_repo(mrtuple);
+                        match memobk.target(&memocfg.mb().scan, memocfg.mime()) {
+                            Ok(()) => "".to_string(),
+                            Err(e) => format!("Error managing repo: {e}")
+                        }
                     }
                 },
-                ConfigModifier::ModifyBackup(bu) => {
+                /*ConfigModifier::ModifyBackup(bu) => {
                     let _memobk = self.mb.lock().unwrap();
                     match self.cfg.modify_backup(&bu) {
                         Ok(()) => "".to_string(),
                         Err(e) => format!("Error altering backup information: {e}")
                     }
-                }
+                }*/
             }
         },
         // IMPORT WILL ALMOST CERTAINLY ALTER THE DB, SO DO A BACKUP
         Manager::Import(imp) => {
             let mut memobk = self.mb.lock().unwrap();
-            self.cfg.check_backup(true);
+            {
+                let mut memocfg = self.cfg.lock().unwrap();
+                memocfg.check_backup(true);
+            }
             match memobk.import(imp) {
                 Ok(s) => s,
                 Err(e) => format!("Error importing files: {e}")
@@ -292,11 +254,21 @@ fn manage_helper(&mut self, vcommand: Vec<&str>) -> String {
                 Err(e) => format!("Error exporting: {e}")
             }
         },
-        Manager::Backup => {
-            let _memobk = self.mb.lock().unwrap();
-            match self.cfg.do_backup() {
-                Ok(s) => s,
-                Err(e) => format!("Error making backup: {e}")
+        Manager::Backup(bup) => {
+            let mut memobk = self.mb.lock().unwrap();
+            memobk.disconnect();
+            let connectable: Option<String>;
+            {
+                let mut memocfg = self.cfg.lock().unwrap();
+                connectable = match memocfg.process_modify_backup(&bup) {
+                    Ok(Some(s)) => Some(s),
+                    Ok(None) => None,
+                    Err(e) => return format!("Error in backup modification call: {e}")
+                };
+            }
+            match memobk.connect(connectable) {
+                Ok(_) => "".to_string(),
+                Err(x) => format!("Backup data could not be loaded: {:?}", x)
             }
         }
     }

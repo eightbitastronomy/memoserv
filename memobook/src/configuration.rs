@@ -22,9 +22,11 @@
 //  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 
+
 /*******************************************************
 *  configuration reader and holder
 ********************************************************/
+
 
 /***********************
   Notes:
@@ -35,17 +37,21 @@
 ***********************/
 
 
-use std::path::PathBuf;
+use std::path::{Path,PathBuf};
 use std::env;
 use crate::emptygenerator::EmptyGenerator;
 use crate::dbgenerator::DBGenerator;
 use crate::repository::Repository;
-use crate::backer::Backer;
-use crate::utckeeper::UtcKeeper;
+use crate::backer::{Backer, TransBackStruct};
 use crate::backerparserjson::BackerParserJSON;
-use crate::utcparser::UtcParser;
+use std::fs;
+use json::object;
+use std::collections::HashMap as HashMap;
+use crate::mimer::Mimer as Mimer;
 
 
+
+#[inline]
 fn strip_prefix_dot(src: &str) -> &str {
     match src.strip_prefix(".") {
         Some(s) => s,
@@ -55,31 +61,23 @@ fn strip_prefix_dot(src: &str) -> &str {
 
 
 
-
 #[derive(Clone)]
-pub struct MBInfo {
+pub struct MBInfo
+{
     pub src: String,      //path of db file
     pub table: String,    //name of table in db
     pub scan: Repository, //container for search directories
-    pub alt: bool,        //flag for: needs backed up
-    pub back: UtcKeeper   //the backups object
+    pub alt: bool        //flag for: needs backed up
 }
 
 
 
-//pub mod configuration {
-
-use std::fs;
-use json::object;
-use std::collections::HashMap as HashMap;
-//use super::{MBInfo, Repository};
-//use super::*;
-use crate::mimer::Mimer as Mimer;
-
-
-pub struct Configuration {
+pub struct Configuration<M>
+where M: Backer + BackerParserJSON + std::marker::Send
+{
     path: String,
     mb: MBInfo,
+    back: Option<M>,           //the backups object
     mime: HashMap<String,Mimer>,
     holdover: Vec<(String,json::JsonValue)>,
     changed: bool
@@ -93,15 +91,19 @@ pub struct Configuration {
 }*/
 
 
-impl Configuration {
+impl<M> Configuration<M> 
+where 
+    M: Backer + BackerParserJSON + std::marker::Send
+{
 
     fn new(path: String,
-            mb: MBInfo, 
+            mb: MBInfo,
+            back: Option<M>, 
             mime: HashMap<String,Mimer>, 
             holdover: Vec<(String, json::JsonValue)>, 
-            changed: bool) -> Configuration {
+            changed: bool) -> Configuration<M> {
         Configuration {
-            path, mb, mime, holdover, changed
+            path, mb, back, mime, holdover, changed
         }
     }
     
@@ -117,7 +119,7 @@ impl Configuration {
 	configuration object.
     */
 
-    pub fn read(path: &str) -> Result<Configuration, String> {
+    pub fn read(path: &str, mut back: Option<M>) -> Result<Configuration<M>, String> {
 
         //Note, json lib handles missing pieces quietly. If I try to load/convert 
         //jsonraw["database"]["scan"] it apparently makes a placeholder and doesn't
@@ -174,12 +176,10 @@ impl Configuration {
             }
         }
 
-        // Prepare the "backup" object
-        let parser: UtcParser = UtcParser {};
-        let backup = match parser.read(&rawjson) {
-            Ok(b) => b,
-            Err(e) => { return Err(format!("Parse error: {e}")); }
-        };
+        // Prepare the "backup" object 
+        if let Some(backup) = back.as_mut() {
+            backup.read(&rawjson)?;
+        }
 
         // Prepare the "memobook" info
         let membook = MBInfo { 
@@ -197,8 +197,7 @@ impl Configuration {
             alt: match &rawjson["database"]["alt"] {
                 json::JsonValue::Boolean(x) => *x,
                 _ => true
-            },
-            back: backup
+            }
         };
         processed.insert("database", true);
 
@@ -230,7 +229,7 @@ impl Configuration {
             .collect();
 
         // Return the configuration object
-        Ok(Configuration::new(path.to_string(), membook, mimemap, holds, false))
+        Ok(Configuration::new(path.to_string(), membook, back, mimemap, holds, false))
 
     }
 
@@ -270,10 +269,12 @@ impl Configuration {
 
 
     pub fn assemble_backup_info(&self) -> String {
-        let backupmaker = UtcParser {};
-        let jback = match backupmaker.write(&self.mb.back) {
-            Ok(j) => j,
-            Err(_) => json::JsonValue::Null
+        let jback = match &self.back {
+            Some(bu) => match bu.write() {
+                Ok(j) => j,
+                Err(_) => json::JsonValue::Null
+            },
+            None => json::JsonValue::Null
         };
         match jback {
             json::JsonValue::Object(o) => json::stringify(o),
@@ -283,30 +284,136 @@ impl Configuration {
 
 
     pub fn do_backup(&mut self) -> Result<String, String> {
-        match self.mb.back.make(&self.mb.src, &[self.path.as_str()]) {
+        let Some(bu) = self.back.as_mut() else {
+            return Ok("".to_string());
+        };
+        match bu.make(&self.mb.src, &[self.path.as_str()]) {
             Ok(_) => { 
                 self.changed = true;
                 self.mb.alt = false;
                 Ok("".to_string())
             },
             Err(e) => { 
-                Err(format!("Backup error: {e}")) 
+                Err(format!("Backup error: {e}"))
             }
         }
     }
 
 
-    pub fn modify_backup(&mut self, _input: &str) -> Result<(), String> {
-        // parse the input and apply changes
-        Ok(())
+    fn load_backup(&mut self, loadfile: &str) -> Result<String, String> {
+        if loadfile.is_empty() {
+            return Ok("".to_string());
+        }
+        let Some(bu) = &self.back else {
+            return Ok("".to_string());
+        };
+        let _buobject = match bu.get(loadfile) {
+            Some(ret) => ret,
+            None => { 
+                return Ok("".to_string()); 
+            }
+        };
+        let loadpath = Path::new(loadfile);
+        let name = match loadpath.file_name() {
+            Some(n) => n.to_str().unwrap(),
+            None => { 
+                return Ok("".to_string()); 
+            }
+        };
+        if self.mb.src.is_empty() {
+            self.mb.src = format!("{}archive.db", loadfile.strip_suffix(name).or_else(|| Some("")).unwrap());
+        }
+        match fs::copy(loadfile, self.mb.src.as_str()) {
+            Ok(_) => {
+                self.mb.alt = false;
+                return Ok(self.mb.src.clone());
+            },
+            Err(e) => {
+                return Err(format!("Backup load error: {:?}", e));
+            }
+        }
+    }
+
+
+    pub fn process_modify_backup(&mut self, bupmod: &TransBackStruct) -> Result<Option<String>, String> {
+        let Some(mut bu) = self.back.take() else {
+            return Err("cannot modify backup: no backup information present".to_string());
+        };
+        // apply changes to freq, loc, base
+        if let Some(frq) = bupmod.freq {
+            bu.set_frequency(frq);
+        }
+        if let Some(basestr) = &bupmod.base {
+            bu.set_base(basestr);
+        }
+        if let Some(locstr) = &bupmod.loc {
+            bu.set_location(locstr);
+        }
+        // Get list of existing bu's
+        let preexcopies: Vec<_> = bu.iter().map(|c| c.clone()).collect();
+        // Hold on new mult, use max(old, new) + 1 temporarily
+        let preexmult = bu.get_multiplicity();
+        let newmult = match bupmod.mult {
+            Some(m) => {
+                bu.set_multiplicity(
+                    if preexmult >= m {
+                        preexmult + 1
+                    } else {
+                        m + 1
+                    }
+                );
+                m 
+            },
+            None => {
+                bu.set_multiplicity(preexmult+1);
+                preexmult
+            }
+        };
+        self.back = Some(bu); // because of take(), above
+        // if force, make bu
+        if bupmod.force {
+            self.do_backup()?;
+        }
+        // if load, load bu (only the step prior makes a bu, not this one)
+        let retstring: String = if let Some(loadstr) = &bupmod.load { 
+            match self.load_backup(loadstr) {
+                Ok(s) => s,
+                Err(e) => return Err(e)
+            }
+        } else {
+            self.mb.src.clone()
+        };
+        let Some(mut bu) = self.back.take() else {
+            return Err("cannot modify backup: no backup information present".to_string());
+        };
+        // if clear, remove all items in the list of old bu's
+        if bupmod.remove {
+            for oldcopy in preexcopies.iter() {
+                bu.remove_and_erase(Some(oldcopy));
+            }
+        }
+        // set the new mult
+        bu.set_multiplicity(newmult);
+        self.back = Some(bu); // because of take(), above
+        // it is not guaranteed this will be set by previous lines
+        self.changed = true;
+        // by passing back a load path or not, we tell the caller whether to
+        //   reconnect the database
+        if retstring.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(retstring.to_string()))
+        }
     }
 
 
     pub fn check_backup(&mut self, auto: bool) {
-        if self.mb.back.check() && (auto || self.mb.alt || self.changed) {
-            match self.mb.back.make(&self.mb.src, &[self.path.as_str()]) {
+        let Some(bu) = self.back.as_mut() else {
+            return;
+        };
+        if bu.check() && (auto || self.mb.alt || self.changed) {
+            match bu.make(&self.mb.src, &[self.path.as_str()]) {
                 Ok(_) => { 
-                    //println!("Backup complete"); 
                     self.changed = true;
                     self.mb.alt = false;
                 },
@@ -428,12 +535,8 @@ impl Configuration {
         // first repo contains removals, 2nd contains additions.
         // So 1st.includes is all the removals from self.includes.
         // Defined behavior: trunk is dropped if this method is used.        
-
-        // XXXX Defined behavior: If a trunk exists, check if it is a prefix for
-        //   all the add repo directories. If it is not, then every dir
-        //   must be converted to a non-trunked repo. If it is, remove the
-        //   the trunk from the adds and then process.
-        /*let trunk = self.mb.scan.get_trunk();
+        /* Following is not implemented for the time being...
+        let trunk = self.mb.scan.get_trunk();
         let bufferadds: Repository;
         let bufferrems: Repository;
         if trunk == "" {
@@ -510,12 +613,12 @@ impl Configuration {
                 include: bufferinclude,
                 exclude: bufferexclude
             };
-            let backupmaker = UtcParser {};
-            let jback = match backupmaker.write(&self.mb.back) {
-                Ok(j) => j,
-                Err(_) => { // silently move on, for now 
-                    return;
-                }
+            let jback = match &self.back {
+                Some(bu) => match bu.write() {
+                    Ok(jret) => jret,
+                    Err(_) => json::JsonValue::Null
+                },
+                None => json::JsonValue::Null
             };
             let jdatabase = object!{
                 src: self.mb.src.as_str(),
@@ -550,6 +653,3 @@ impl Configuration {
 
 
 } //end impl Configuration
-
-
-//} //end module configuration

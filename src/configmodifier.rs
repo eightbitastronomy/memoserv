@@ -30,6 +30,6 @@ use memobook::repository::Repository;
 pub enum ConfigModifier {
     SetSource(String),
     SetRepo(Repository),
-    ModifyRepo((Repository, Repository)),
-    ModifyBackup(String)
+    ModifyRepo((Repository, Repository))//,
+    //ModifyBackup(String)
 }

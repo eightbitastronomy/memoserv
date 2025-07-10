@@ -36,6 +36,7 @@ use memobook::modifiers::{
     ModifyTargetRemove
 };
 use memobook::transportstruct::TransPortStruct;
+use memobook::backer::{BuNumber, TransBackStruct};
 use crate::manager::Manager;
 use crate::configmodifier::ConfigModifier;
 
@@ -484,6 +485,85 @@ pub fn parse_manage_export(input: &[&str]) -> std::result::Result<Manager, MBErr
 }
 
 
+pub fn parse_manage_backup(input: &[&str]) -> std::result::Result<Manager, MBError> {
+    let mut clear: bool = false;
+    let mut force: bool = false;
+    let mut mult: Option<BuNumber> = None;
+    let mut freq: Option<BuNumber> = None;
+    let mut loc: Option<String> = None;
+    let mut base: Option<String> = None;
+    let mut load: Option<String> = None;
+    let mut index: usize = 0;
+    let count: usize = input.len();
+    if count % 2 != 0 {
+        return Err(MBError::DBusMessage("invalid format for backup modification command".to_string()));
+    }
+    while index < count {
+        match input[index] {
+            "load" => {
+                load = Some(input[index + 1].to_string());
+            },
+            "base" => {
+                base = Some(input[index + 1].to_string());
+            },
+            "loc" => {
+                loc = Some(input[index + 1].to_string());
+            },
+            "mult" => {
+                mult = match input[index+1].to_string().parse::<BuNumber>() {
+                    Ok(x) => Some(x),
+                    Err(_) => return Err(MBError::DBusMessage("invalid value for # of backup copies".to_string()))
+                };
+            },
+            "freq" => {
+                freq = match input[index+1].to_string().parse::<BuNumber>() {
+                    Ok(x) => Some(x),
+                    Err(_) => return Err(MBError::DBusMessage("invalid value for frequency of backups".to_string()))
+                };
+            },
+            "clear" => {
+                match input[index + 1] {
+                    "true" => {
+                        clear= true;
+                    },
+                    "false" => {
+                        clear = false;
+                    },
+                    ln => {
+                        return Err(MBError::DBusMessage(format!("invalid value [{ln}] for true/false option in backup modification")));
+                    }
+                }
+            },
+            "force" => {
+                match input[index + 1] {
+                    "true" => {
+                        force= true;
+                    },
+                    "false" => {
+                        force = false;
+                    },
+                    ln => {
+                        return Err(MBError::DBusMessage(format!("invalid value [{ln}] for true/false option in backup modification")));
+                    }
+                }
+            },
+            kw => {
+                return Err(MBError::DBusMessage(format!("invalid keyword [{kw}] in import command")));
+            }
+        }
+        index += 2;
+    }
+    Ok(Manager::Backup(TransBackStruct {
+            remove: clear, 
+            force, 
+            mult, 
+            freq, 
+            base, 
+            loc, 
+            load}))   
+}
+
+
 pub fn parse_manage_msg(input: Vec<&str>) -> std::result::Result<Manager, MBError> {
     let managetype: &str = input[0];
     let count = match input[1].to_string().parse::<usize>() {
@@ -497,6 +577,7 @@ pub fn parse_manage_msg(input: Vec<&str>) -> std::result::Result<Manager, MBErro
         "configuration" => parse_manage_config(&input[2..]),
         "import" => parse_manage_import(&input[2..]),
         "export" => parse_manage_export(&input[2..]),
+        "backup" => parse_manage_backup(&input[2..]),
         _ => Err(MBError::DBusMessage("unknown manage call type".to_string()))
     }
 }

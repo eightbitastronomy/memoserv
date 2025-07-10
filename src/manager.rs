@@ -23,6 +23,7 @@
 
 
 use memobook::transportstruct::TransPortStruct;
+use memobook::backer::TransBackStruct;
 use crate::configmodifier::ConfigModifier;
 
 
@@ -30,5 +31,5 @@ pub enum Manager {
     Configure(ConfigModifier),
     Import(TransPortStruct),
     Export(TransPortStruct),
-    Backup,    
+    Backup(TransBackStruct),    
 }

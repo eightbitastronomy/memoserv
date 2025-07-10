@@ -27,13 +27,20 @@ use std::cmp::Ordering;
 use std::fs;
 use chrono::{
     Utc,
-    TimeDelta
+    TimeDelta,
+    DateTime
 };
 use crate::dbhexgenerator::DBHexGenerator;
 use crate::emptygenerator::EmptyGenerator;
 use crate::mberror::MBError;
-use crate::backer::{Backer, BuNumber, BackCopy};
+use crate::backer::{
+    Backer, 
+    BuNumber, 
+    BackCopy
+};
 use crate::utcbackup::UtcBackup;
+use crate::backerparserjson::BackerParserJSON;
+use json::object;
 
 
 
@@ -52,20 +59,30 @@ pub struct UtcKeeper {
 }
 
 
+unsafe impl Send for UtcKeeper {}
+
+
 impl UtcKeeper {
+
+
+    pub fn default() -> UtcKeeper {
+        UtcKeeper {
+            frequency: 0,
+            multiplicity: 0,
+            copies: VecDeque::default(),
+            base: "".to_string(),
+            suffix: "".to_string(),
+            cfgsuffix: "".to_string(),
+            location: "".to_string(),
+            version: "".to_string()
+        }
+    }
 
 
     pub fn new(freq: BuNumber, mult: BuNumber, mut copyvec: Vec<UtcBackup>) -> UtcKeeper {
         if !copyvec.is_empty() {
             copyvec.sort_by(
                 |a,b| {
-                    /*if a.date() < b.date() {
-                        Ordering::Greater
-                    } else if a.date() == b.date() {
-                        Ordering::Equal
-                    } else {
-                        Ordering::Less
-                    }*/
                     match a.date() {
                         x if x < b.date() => Ordering::Greater,
                         x if x == b.date() => Ordering::Equal,
@@ -127,7 +144,47 @@ impl UtcKeeper {
 
 
 
-impl Backer<UtcBackup> for UtcKeeper {
+//impl Backer<UtcBackup> for UtcKeeper {
+impl Backer for UtcKeeper {
+
+    type BItem = UtcBackup;
+
+    fn pop(&mut self, target: &str) -> Option<UtcBackup> {
+        if self.copies.is_empty() {
+            return None;
+        }
+        let mut hit: Option<usize> = None;
+        for (i, copyitem) in self.copies.iter().enumerate() {
+            if (copyitem.path().as_str() == target) || (format!("{:?}",copyitem.date()).as_str() == target) {
+                hit = Some(i);
+                break;
+            }
+        }
+        if let Some(index) = hit {
+            self.copies.remove(index)
+        } else {
+            None
+        }
+    }
+
+
+    fn get(&self, target: &str) -> Option<&UtcBackup> {
+        if self.copies.is_empty() {
+            return None;
+        }
+        let mut hit: Option<usize> = None;
+        for (i, copyitem) in self.copies.iter().enumerate() {
+            if (copyitem.path().as_str() == target) || (format!("{:?}",copyitem.date()).as_str() == target) {
+                hit = Some(i);
+                break;
+            }
+        }
+        if let Some(index) = hit {
+            Some(&self.copies[index])
+        } else {
+            None
+        }
+    }
 
 
     fn pop_most_recent(&mut self) -> Option<UtcBackup> {
@@ -135,7 +192,7 @@ impl Backer<UtcBackup> for UtcKeeper {
     }
 
 
-    fn most_recent(&self) -> Option<UtcBackup> {
+    fn get_most_recent(&self) -> Option<UtcBackup> {
         if !self.copies.is_empty() {
             Some(self.copies[0].clone())
         } else {
@@ -149,7 +206,7 @@ impl Backer<UtcBackup> for UtcKeeper {
     }
 
 
-    fn least_recent(&self) -> Option<UtcBackup> {
+    fn get_least_recent(&self) -> Option<UtcBackup> {
         if !self.copies.is_empty() {
             Some(self.copies[self.copies.len()-1].clone())
         } else {
@@ -224,16 +281,39 @@ impl Backer<UtcBackup> for UtcKeeper {
     }
 
 
+    fn remove_and_erase(&mut self, targ: Option<&UtcBackup>) {
+        // For now, failure is silent
+        let Some(t) = targ else {
+            return;
+        };
+        match fs::remove_file(t.path()) {
+            Ok(_) => {},
+            Err(_) => {
+                //println!("Can't delete file: {:?}", e);
+            }
+        }
+        for item in t.aux() {
+            match fs::remove_file(item) {
+                Ok(_) => {},
+                Err(_) => {
+                    //println!("Can't delete aux file: {:?}", e);
+                }
+            }
+        }
+        self.remove(t.path().as_str());
+    }
+
+
     fn get_frequency(&self) -> BuNumber {
         self.frequency
     }
 
 
-    fn set_frequency(&mut self, freq: &BuNumber) {
-        self.frequency = if *freq < (1 as BuNumber) {
+    fn set_frequency(&mut self, freq: BuNumber) {
+        self.frequency = if freq < (1 as BuNumber) {
             1
         } else {
-            *freq
+            freq
         };
     }
 
@@ -243,17 +323,18 @@ impl Backer<UtcBackup> for UtcKeeper {
     }
 
 
-    fn set_multiplicity(&mut self, mult: &BuNumber) {
-        self.multiplicity = if *mult < (2 as BuNumber) {
+    fn set_multiplicity(&mut self, mult: BuNumber) {
+        self.multiplicity = if mult < (2 as BuNumber) {
             1
         } else {
-            *mult
+            mult
         };
     }
 
 
     #[allow(refining_impl_trait)]
     fn iter(&self) -> impl Iterator<Item=&UtcBackup> { // + use <'_> {
+    //fn iter(&self) -> BackupIterator {
         BackupIterator {
             list: &self.copies,
             index: 0,
@@ -297,12 +378,7 @@ impl Backer<UtcBackup> for UtcKeeper {
 
 
     fn check(&self) -> bool {
-        if let Some(recent) = self.most_recent() {
-            /*if (Utc::now() - recent.date()) >= TimeDelta::days(self.frequency.into()) {
-                true
-            } else {
-                false
-            }*/
+        if let Some(recent) = self.get_most_recent() {
             (Utc::now() - recent.date()) >= TimeDelta::days(self.frequency.into())
         } else {
             true
@@ -373,6 +449,187 @@ impl<'a> Iterator for BackupIterator<'a> {
     }
 
 }
+
+
+
+impl BackerParserJSON for UtcKeeper {
+
+
+    //type CopyItem = UtcBackup; 
+    //type Item = UtcKeeper;
+
+
+    //fn read(source: &json::JsonValue) -> Result<UtcKeeper, String> {
+    fn read(&mut self, source: &json::JsonValue) -> Result<(), String> {
+        let vers: String = match &source["database"]["back"]["version"] {
+            json::JsonValue::Short(x) => x.to_string(),
+            json::JsonValue::String(z) => z.to_owned(),
+            _ => { return Err("Parse error on backup object".to_string()); }
+        };
+        if vers != "json_utc_01_00" {
+            return Err("Backup object version mismatch".to_string());
+        }
+        let freq: BuNumber = match &source["database"]["back"]["frequency"] {
+            json::JsonValue::Number(n) => {
+                match n.to_string().parse::<BuNumber>() {
+                    Ok(o) => o,
+                    Err(_) => { return Err("Parse error on frequency".to_string()); }
+                }
+            },
+            json::JsonValue::Short(x) => { 
+                match x.to_string().parse::<BuNumber>() {
+                    Ok(val) => val,
+                    Err(_) => { return Err("Parse error on backup object".to_string()); }
+                }
+            },
+            json::JsonValue::String(z) => {
+                match z.to_string().parse::<BuNumber>() {
+                    Ok(val) => val,
+                    Err(_) => { return Err("Parse error on backup object".to_string()); }
+                }
+            },
+            _ => { return Err("Parse error on backup object".to_string()); }
+        };
+        let mult: BuNumber = match &source["database"]["back"]["multiplicity"] {
+            json::JsonValue::Number(n) => {
+                match n.to_string().parse::<BuNumber>() {
+                    Ok(o) => o,
+                    Err(_) => { return Err("Parse error on multiplicity".to_string()); }
+                }
+            },
+            json::JsonValue::Short(x) => { 
+                match x.to_string().parse::<BuNumber>() {
+                    Ok(val) => val,
+                    Err(_) => { return Err("Parse error on backup object".to_string()); }
+                }
+            },
+            json::JsonValue::String(z) => {
+                match z.to_string().parse::<BuNumber>() {
+                    Ok(val) => val,
+                    Err(_) => { return Err("Parse error on backup object".to_string()); }
+                }
+            },
+            _ => { return Err("Parse error on backup object".to_string()); }
+        };
+        let base: &str = match &source["database"]["back"]["base"] {
+            json::JsonValue::String(x) => x.as_str(),
+            json::JsonValue::Short(x) => x.as_str(),
+            _ => { return Err("Parse error on backup object".to_string()); }
+        };
+        let suffixvec: Vec<String> = match &source["database"]["back"]["suffix"] {
+            json::JsonValue::Array(a) => {
+                a.iter().map(
+                    |y| match y {
+                        json::JsonValue::String(z) => z.to_owned(),
+                        json::JsonValue::Short(z) => z.to_string(),
+                        _ => "".to_string()
+                    }
+                ).collect()
+            },
+            _ => {
+                return Err("Parse error on backup object suffix array".to_string());
+            }
+        };
+        if suffixvec.len() < 2 {
+            return Err("Parse error on backup object suffix array".to_string());
+        }
+        let suffix: &str = suffixvec[0].as_str();
+        let cfgsuffix: &str = suffixvec[1].as_str();
+        let location: String = match &source["database"]["back"]["location"] {
+            json::JsonValue::String(x) => x.to_owned(),
+            json::JsonValue::Short(x) => x.to_string(),
+            _ => { return Err("Parse error on backup object".to_string()); }
+        };
+        let mut copiesvec: Vec<UtcBackup> = Vec::new();
+        if source["database"]["back"]["copies"].is_array() {
+            if let json::JsonValue::Array(x) = &source["database"]["back"]["copies"] {
+                let incvec: Vec<String> = x.iter().map(
+                    |y| match y {
+                        json::JsonValue::String(z) => z.to_owned(),
+                        json::JsonValue::Short(z) => z.to_string(),
+                        _ => "".to_string()
+                    }
+                    ).collect();
+                for item in incvec.into_iter() {
+                    let sitem = item.split(' ').collect::<Vec<_>>();
+                    //println!("item is {:?}", sitem);
+                    match sitem[..] {
+                        [a,b,c] => { 
+                            match DateTime::parse_from_rfc3339(c) {
+                                Ok(dt) => copiesvec.push(
+                                    UtcBackup::new( 
+                                        a, 
+                                        b, 
+                                        &chrono::DateTime::from(dt)
+                                    )
+                                ),
+                                Err(_) => { return Err("Parse error on datetime object".to_string()); }
+                            }
+                            
+                        },
+                        _ => { 
+                            //println!("item in incvec parsed {}", item); 
+                            continue; 
+                        }
+                    }
+                }
+            }
+        }
+        if !copiesvec.is_empty() {
+            copiesvec.sort_by(
+                |a,b| {
+                    match a.date() {
+                        x if x < b.date() => Ordering::Greater,
+                        x if x == b.date() => Ordering::Equal,
+                        _ => Ordering::Less 
+                    }
+                }
+            );
+        }
+        self.version = vers.to_string();
+        self.frequency = freq;
+        self.multiplicity = mult;
+        self.copies = if copiesvec.is_empty() {
+            VecDeque::new()
+        } else {
+            while copiesvec.len() > (mult as usize) {
+                copiesvec.pop();
+            }
+            VecDeque::from(copiesvec)
+        };
+        self.base = base.to_string();
+        self.suffix = suffix.to_string();
+        self.cfgsuffix = cfgsuffix.to_string();
+        self.location = location;
+        Ok(())
+    }
+
+
+    fn write(&self) -> Result<json::JsonValue, String> {
+        let jback = object!{
+            version: self.version.clone(),
+            frequency: self.frequency,
+            multiplicity: self.multiplicity,
+            copies: self.iter().map(|x: &UtcBackup| 
+                {
+                    let tempvec = x.aux();
+                    if tempvec.is_empty() {
+                        None
+                    } else {
+                        Some(format!("{} {} {}", x.path(), tempvec[0], x.date().format("%+")))
+                    }
+                }).collect::<Vec<_>>(),
+            base: self.base.clone(),
+            suffix: vec![self.suffix.clone(), self.cfgsuffix.clone()],
+            location: self.location.clone()
+        };
+        Ok(jback)
+    }
+
+}
+
+
+/****** These tests probably no longer work properly, need to rewrite  ******/
 
 
 #[cfg(test)]

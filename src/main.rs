@@ -27,6 +27,7 @@ use event_listener::{Listener};
 use memoserv::MemoBookServer;
 use memobook::{MemoBook, Queryable};
 use memobook::configuration::Configuration;
+use memobook::utckeeper::UtcKeeper;
 use std::env;
 use std::sync::{Arc,Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +46,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut conf: Configuration = match Configuration::read(confaddr) {
+    let mut conf: Configuration<UtcKeeper> = match Configuration::read(confaddr, Some(UtcKeeper::default())) {
         Ok(c) => c,
         Err(e) => { 
             println!("Could not open configuration file: {:?}", e);
@@ -60,7 +61,8 @@ async fn main() -> Result<()> {
             return Ok(());
         }
     }
-    let mut d = MemoBook::new(&mut conf);
+    //let mut d = MemoBook::new(&mut conf);
+    let mut d = MemoBook::new(conf.mb(), conf.mime());
 
     match d.connect(None) {
         Ok(_) => println!("db opened"),
@@ -75,7 +77,7 @@ async fn main() -> Result<()> {
 
     let memobook = MemoBookServer {
         name: "MemoBook".to_string(),
-        cfg: conf,
+        cfg: Arc::new(Mutex::new(conf)),
         events: Arc::new(event_listener::Event::new()),
         exitflag: exitflag.clone(),
         mb: mbcover

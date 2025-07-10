@@ -61,7 +61,6 @@ pub mod backer;
 pub mod utcbackup;
 pub mod utckeeper;
 pub mod backerparserjson;
-pub mod utcparser;
 
 
 use rusqlite::{Connection, Error};
@@ -69,6 +68,7 @@ use rusqlite::{Connection, Error};
 use std::collections::HashMap as HashMap;
 use mimer::Mimer as Mimer;
 use configuration::MBInfo as MBInfo;
+use crate::repository::Repository;
 use crate::queryer::Queryer as Queryer;
 use crate::filtercontainer::FilterContainer;
 use crate::logic::Logic as Logic;
@@ -76,7 +76,6 @@ use crate::queryassembler::QueryAssembler;
 use crate::litequeryassembler::lite_query_assembler::LiteQueryAssembler as LiteQueryAssembler;
 use crate::modifierassembler::ModifierAssembler;
 use crate::mberror::MBError;
-use crate::configuration::Configuration;
 use crate::dbopenerassembler::DBOpenerAssembler;
 use crate::liteopen::LiteOpen;
 use crate::modifiers::Modifier;
@@ -92,6 +91,8 @@ use crate::importcrawlerp::import_crawler::ImportCrawler; // <--Change here to u
 use crate::exportlogger::ExportLogger;
 
 
+
+#[inline]
 fn gather_types(query: &impl (for <'a> Queryer<'a>)) -> Option<Vec<String>> {
     let mut retvec: Vec<String> = vec![];
     'filts: for filter in query.iter_filters() {
@@ -109,6 +110,7 @@ fn gather_types(query: &impl (for <'a> Queryer<'a>)) -> Option<Vec<String>> {
 }
 
 
+#[inline]
 fn gather_marks(query: &impl (for <'a> Queryer<'a>)) -> Result<(Logic,Vec<String>), MBError> {
     let mut rettup = (Logic::OR, vec![]);
     'filts: for filter in query.iter_filters() {
@@ -135,7 +137,7 @@ pub trait Queryable {
     fn connect(&mut self, source: Option<String>) -> Result<(), MBError>;
     fn search(&self, req: impl (for <'a> Queryer<'a>)) -> Result<Vec<String>, MBError>;
     fn modify(&mut self, cmd: &Modifier) -> Result<(), MBError>;
-    fn target(&mut self, cfg: &Configuration) -> Result<(), MBError>;
+    fn target(&mut self, scan: &Repository, mime: &HashMap<String,Mimer>) -> Result<(), MBError>;
     fn import(&mut self, portinfo: TransPortStruct) -> Result<String, MBError>;
     fn export(&self, portinfo: TransPortStruct) -> Result<String, MBError>;
     fn disconnect(&mut self);  
@@ -152,15 +154,17 @@ pub struct MemoBook {
 
 impl MemoBook {
 
+
     //REWRITE: NEW SHOULD RETURN AN EMPTY MEMOBOOK. INITIALIZE SHOULD BE USED TO SET EVERYTHING.
-    pub fn new(config: &mut Configuration /*, dbtype: DBType*/) -> MemoBook {
+    pub fn new(info: &MBInfo, mime: &HashMap<String,Mimer>  /*, dbtype: DBType*/) -> MemoBook {
         MemoBook {
             connection: None, 
-            info: config.mb().clone(),
-            mime: config.mime().clone()
+            info: info.clone(),//config.mb().clone(),
+            mime: mime.clone()//config.mime().clone()
             //translate: DBBundler::new(dbtype)
         }
     }
+
 
     fn connection_helper(&mut self) -> Result<(), Error> {
         let conn = Connection::open(&self.info.src)?;
@@ -189,6 +193,7 @@ impl MemoBook {
         self.connection = Some(conn);
         Ok(())
     }
+
 
     fn resolve_type_suffix(&self, typeopt: Option<Vec<String>>) -> Result<Vec<String>, MBError> {
         let mut resultv: Vec<String> = Vec::new();
@@ -245,12 +250,12 @@ impl MemoBook {
 unsafe impl Send for MemoBook {}
 
 
+
 impl Queryable for MemoBook {
 
+
+    ///Connect to db, creating table if it doesn't exist
     fn initialize(&mut self) -> Result<(), MBError> {
-        // Future: this function should handle the case where there was no conf.json given.
-        //         It will create the database and give the configuration object the info
-        //         necessary to write out the json.
         if self.connection.is_none() {
             self.connection = match Connection::open(&self.info.src) { 
                 Ok(x) => Some(x),
@@ -259,8 +264,6 @@ impl Queryable for MemoBook {
         }
         let opener = LiteOpen;
         let conn = self.connection.as_ref().unwrap();
-        //match conn.execute(format!("create table {} (mark NCHAR(255) NOT NULL,file NCHAR(1023) NOT NULL,type SMALLINT)",&self.info.table).as_str(),())
-        //match conn.execute(LiteOpen::form_create_table(&self.info.table).as_str(), ())
         match conn.execute(opener.form_create_table(&self.info.table).as_str(), ())
         {   Ok(_) => Ok(()),
             Err(x) => Err(MBError::Sqlite(x)) 
@@ -281,12 +284,12 @@ impl Queryable for MemoBook {
     }
 
     
+    ///Database searches, implemented with the Queryer trait
     fn search(&self, req: impl (for <'a> Queryer<'a>)) -> Result<Vec<String>, MBError> {
 		let mut v = Vec::new();
         if req.grep() {
             /********* windows, no grep functionality?, need a macro or something for windows detection *******/
             // maybe require uutils or coreutils for grep...?
-            println!("Grepping...");
             let resolvedtypelist: Vec<String> = self.resolve_type_suffix(gather_types(&req))?;
             let marktuple = gather_marks(&req)?;
             let mut fs_searcher: GrepCrawler = GrepCrawler::new();
@@ -302,11 +305,11 @@ impl Queryable for MemoBook {
         }
         if let Some(conn) = self.connection.as_ref() {
             let queryassembler = LiteQueryAssembler::new(&self.info.table, req);
-            /* here, check for complexity(), need an in-code algorithm if complexity is too high */
+            /* here, check for complexity(), need an in-code algorithm if complexity is too high
+               (not implemented at this time) */
             let querystring = queryassembler.form()?;
             match self.search_helper(conn, querystring) {
                 Ok(mut res) => { 
-                    //res = res.into_iter().filter(|r| !r.is_empty()).collect();
                     res.retain(|r| !r.is_empty());
                     v.append(&mut res); 
                 },
@@ -319,18 +322,18 @@ impl Queryable for MemoBook {
     }
 
 
-    // behavior of FieldReplace:
-    //   o  "field" is chosen by caller, i.e., mark, file, or type
-    //   o  The value pair is (original value, replacement value)
-    //   o  All records with field=original are updated to field=replacement
-    // behavior of MarkUpdate:
-    //   o  accepts a file name, marks to be added, marks to be removed
-    //   o  queries database for types associated with the file name
-    //   o  applies mark additions and deletions for the file for all types
-    // behavior of TypeUpdate:
-    //   o  accepts a file name, types to be added, types to be removed
-    //   o  queries database for marks associated with the file name
-    //   o  applies type additions and deletions for the file for all marks
+    /// behavior of FieldReplace:
+    ///   o  "field" is chosen by caller, i.e., mark, file, or type
+    ///   o  The value pair is (original value, replacement value)
+    ///   o  All records with field=original are updated to field=replacement
+    /// behavior of MarkUpdate:
+    ///   o  accepts a file name, marks to be added, marks to be removed
+    ///   o  queries database for types associated with the file name
+    ///   o  applies mark additions and deletions for the file for all types
+    /// behavior of TypeUpdate:
+    ///   o  accepts a file name, types to be added, types to be removed
+    ///   o  queries database for marks associated with the file name
+    ///   o  applies type additions and deletions for the file for all marks
     fn modify(&mut self, cmd: &Modifier) -> Result<(), MBError> {
         if let Some(conn) = self.connection.as_mut() {
             let cmdobj: Box<dyn ModifierAssembler> = match cmd {
@@ -356,12 +359,16 @@ impl Queryable for MemoBook {
         Ok(())
     }
 
-    fn target(&mut self, cfg: &Configuration) -> Result<(), MBError> {
-        self.info.scan = cfg.mb().scan.clone();
-        self.mime = cfg.mime().clone();
+
+    ///Target: set the Repository (include/exclude) dirs, set the mime lookup table
+    fn target(&mut self, scan: &Repository, mime: &HashMap<String,Mimer>) -> Result<(), MBError> {
+        self.info.scan = scan.clone();
+        self.mime = mime.clone();
         Ok(())
     }
 
+
+    ///Import memobook db using json export output
     fn import(&mut self, portinfo: TransPortStruct) -> Result<String, MBError> {
         if let Some(conn) = self.connection.as_mut() {
             let mut fs_importer: ImportCrawler = ImportCrawler::new();
@@ -379,7 +386,6 @@ impl Queryable for MemoBook {
             };
             let asyncresult = asyncruntime.block_on(async { fs_importer.crawl().await });
             // Change the next match line according to whether async is being used or not
-            //match fs_importer.crawl() {
             match asyncresult {
                 Ok(_) => {},
                 Err(e) => { return Err(e); }
@@ -408,6 +414,8 @@ impl Queryable for MemoBook {
         Ok("pending".to_string())
     }
 
+
+    ///Export database entries with file checksums to a json file
     fn export(&self, portinfo: TransPortStruct) -> Result<String, MBError> {
         if let Some(conn) = self.connection.as_ref() {
             let mut logger: ExportLogger = ExportLogger::new(&portinfo.log, "bookmarks");
@@ -417,9 +425,20 @@ impl Queryable for MemoBook {
         Ok(format!("export to {} complete",&portinfo.log))   
     }
 
-    /* instead of implementing something here, must handle writing out the configuration */
-    //Nope, this will be done elsewhere. The db only has need-to-know info from the configuration.
+
+    /// Drop rusqlite connection so that, e.g., a backup may be loaded and file pointers dropped
     fn disconnect(&mut self) {
+        if let Some(conn) = self.connection.take() {
+            match conn.close() {
+                Ok(_) => { },
+                Err(_) => {
+                    //println!("Error closing connection");
+                }
+            }
+        } else {
+            //println!("No connection to close");
+        }
+        self.connection = None;
     }   
 
 

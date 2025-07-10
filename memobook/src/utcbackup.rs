@@ -54,7 +54,6 @@ impl BackCopy for UtcBackup {
 
     type D = DateTime<Utc>;
 
-
     fn date(&self) -> Self::D {
         self.date
     }

@@ -76,30 +76,6 @@
             "pdf"
         ]
     ],
-    "font": {
-        "face": "FreeSans",
-        "size": 10,
-        "family": 76,
-        "slant": "normal",
-        "style": "thisstyle",
-        "weight": "normal",
-        "underlined": "false",
-        "strikethrough": "false",
-        "antialiased": "False"
-    },
-    "tkfont": {
-        "family": "FreeSans",
-        "size": 10,
-        "weight": "normal"
-    },
-    "style": {
-        "theme": "default",
-        "font": {
-            "size": 0
-        }
-    },
-    "wrap": "word",
-    "index": "/home/illudens/somefolder/index.xml",
     "save": "/home/illudens/yourfolderofchoice/audiovideoperchance",
     "open": "/home/illudens/yourfolderofchoice/yourarmsforahug",
     "loc": "./conf.xml",
